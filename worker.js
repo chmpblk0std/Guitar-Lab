@@ -1,0 +1,1 @@
+export default async fetch request env const URL, const blockedPaths. If blockedPaths includes URL pathname or URL pathname starts with /.git or URL pathname starts with /. wrangler/. return new response not found 404, otherwise return env ASSETS.fetch request.
