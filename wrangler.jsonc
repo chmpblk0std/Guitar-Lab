@@ -1,2 +1,17 @@
-{"$schema":" node_modules/wrangler/config-schema.json", "name":"guitar-lab", " main":"./worker.js", "compatibility_date":"2026-09-22", "assets":{ "directory":".",
-"binding":"ASSETS", "run_worker_first":true}, "kv_namespaces":[{" binding":"GuitarLabAccess"," id":"57cce220df44c8888a2b895a28c64282"}]}
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "guitar-lab",
+  "main": "./worker.js",
+  "compatibility_date": "2026-09-22",
+  "assets": {
+    "directory": ".",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "GuitarLabAccess",
+      "id": "57cce220df44c8888a2b895a28c64282"
+    }
+  ]
+}
