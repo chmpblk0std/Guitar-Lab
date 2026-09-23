@@ -199,7 +199,7 @@ function adminLoginPage(errorMessage = "") {
     }
     .error { color: #ff8a8a; margin-bottom: 16px; }
   </style>
-<script>function copyAccessLink(button, link) { navigator.clipboard.writeText(link).then(function() { var original = button.textContent; button.textContent = '✓ Copiato!'; setTimeout(function() { button.textContent = original; }, 1500); }); }</script></head>
+<script>function copyAccessLink(button) { var link = button.getAttribute("data-access-link"); navigator.clipboard.writeText(link).then(function() { var original = button.textContent; button.textContent = "✓ Copiato!"; setTimeout(function() { button.textContent = original; }, 1500); }); }</script></head>
 <body>
   <main>
     <h1>Guitar Lab — Admin</h1>
@@ -303,7 +303,7 @@ async function adminDashboard(env, message = "", createdLink = "") {
       <h2>Accessi esistenti</h2>
       ${accesses.length ? `<div>${accesses.map(access => {
         const status = access.revoked ? "Revocato" : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? "Scaduto" : "Attivo");
-        return `<div style="padding:12px 0;border-top:1px solid #333"><strong>${escapeHtml(access.label)}</strong><br>Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Link: <span class="link">${escapeHtml(new URL(`/access/${access.token}`, "https://guitar-lab.wb-chomp479.workers.dev").toString())}</span><button type="button" onclick="copyAccessLink(this, 'https://guitar-lab.wb-chomp479.workers.dev/access/${access.token}')">Copia link</button><br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}${!access.revoked ? `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Revoca accesso</button></form>` : ""}</div>`;
+        return `<div style="padding:12px 0;border-top:1px solid #333"><strong>${escapeHtml(access.label)}</strong><br>Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Link: <span class="link">${escapeHtml(new URL(`/access/${access.token}`, "https://guitar-lab.wb-chomp479.workers.dev").toString())}</span><button type="button" data-access-link="https://guitar-lab.wb-chomp479.workers.dev/access/${access.token}" onclick="copyAccessLink(this)">Copia link</button><br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}${!access.revoked ? `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Revoca accesso</button></form>` : ""}</div>`;
       }).join("")}</div>` : "<p>Nessun accesso creato.</p>"}
 
       <h2>Crea nuovo accesso</h2>
