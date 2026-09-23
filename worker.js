@@ -199,7 +199,7 @@ function adminLoginPage(errorMessage = "") {
     }
     .error { color: #ff8a8a; margin-bottom: 16px; }
   </style>
-<script>function copyAccessLink(button) { var link = button.getAttribute("data-access-link"); navigator.clipboard.writeText(link).then(function() { var original = button.textContent; button.textContent = "✓ Copiato!"; setTimeout(function() { button.textContent = original; }, 1500); }); }</script></head>
+</head>
 <body>
   <main>
     <h1>Guitar Lab — Admin</h1>
@@ -289,6 +289,7 @@ async function adminDashboard(env, message = "", createdLink = "") {
   </style>
 </head>
 <body>
+<script>function copyAccessLink(button) { var link = button.getAttribute("data-access-link"); navigator.clipboard.writeText(link).then(function() { var original = button.textContent; button.textContent = "✓ Copiato!"; setTimeout(function() { button.textContent = original; }, 1500); }); }</script>
   <main>
     <section>
       <h1>Guitar Lab — Admin</h1>
