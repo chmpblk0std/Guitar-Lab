@@ -220,7 +220,14 @@ function adminLoginPage(errorMessage = "") {
   });
 }
 
-function adminDashboard(message = "", createdLink = "") {
+async function adminDashboard(env, message = "", createdLink = "") {
+  const listed = await env.GuitarLabAccess.list({ prefix: "access:" });
+  const accesses = [];
+  for (const key of listed.keys) {
+    const access = await env.GuitarLabAccess.get(key.name, "json");
+    if (access) accesses.push(access);
+  }
+  accesses.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   return new Response(`<!doctype html>
 <html lang="it">
 <head>
@@ -292,6 +299,12 @@ function adminDashboard(message = "", createdLink = "") {
         <strong>Link di accesso creato:</strong>
         <span class="link">${escapeHtml(createdLink)}</span>
       </div>` : ""}
+
+      <h2>Accessi esistenti</h2>
+      ${accesses.length ? `<div>${accesses.map(access => {
+        const status = access.revoked ? "Revocato" : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? "Scaduto" : "Attivo");
+        return `<div style="padding:12px 0;border-top:1px solid #333"><strong>${escapeHtml(access.label)}</strong><br>Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}${!access.revoked ? `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Revoca accesso</button></form>` : ""}</div>`;
+      }).join("")}</div>` : "<p>Nessun accesso creato.</p>"}
 
       <h2>Crea nuovo accesso</h2>
       <form method="post" action="/admin/access/create">
@@ -367,7 +380,7 @@ export default {
 
     if (url.pathname === "/admin" && request.method === "GET") {
       if (await isValidAdminSession(request, env.ADMIN_PASSWORD)) {
-        return adminDashboard();
+        return adminDashboard(env);
       }
 
       return adminLoginPage();
@@ -412,11 +425,11 @@ export default {
         const parsed = new Date(expiresAtInput);
 
         if (Number.isNaN(parsed.getTime())) {
-          return adminDashboard("La data di scadenza non è valida.");
+          return adminDashboard(env, "La data di scadenza non è valida.");
         }
 
         if (parsed.getTime() <= Date.now()) {
-          return adminDashboard("La scadenza deve essere nel futuro.");
+          return adminDashboard(env, "La scadenza deve essere nel futuro.");
         }
 
         expiresAt = parsed.toISOString();
@@ -437,7 +450,22 @@ export default {
 
       const accessUrl = new URL(`/access/${token}`, url.origin).toString();
 
-      return adminDashboard("Accesso creato correttamente.", accessUrl);
+      return adminDashboard(env, "Accesso creato correttamente.", accessUrl);
+    }
+
+    if (url.pathname === "/admin/access/revoke" && request.method === "POST") {
+      if (!(await isValidAdminSession(request, env.ADMIN_PASSWORD))) {
+        return adminLoginPage("Sessione amministrativa non valida o scaduta.");
+      }
+      const formData = await request.formData();
+      const token = formData.get("token");
+      if (typeof token !== "string" || !token || token.includes("/")) return adminDashboard(env, "Accesso da revocare non valido.");
+      const accessKey = `access:${token}`;
+      const access = await env.GuitarLabAccess.get(accessKey, "json");
+      if (!access) return adminDashboard(env, "Accesso non trovato.");
+      access.revoked = true;
+      await env.GuitarLabAccess.put(accessKey, JSON.stringify(access));
+      return adminDashboard(env, "Accesso revocato correttamente.");
     }
 
     if (url.pathname === "/access" || url.pathname.startsWith("/access/")) {
