@@ -304,7 +304,7 @@ async function adminDashboard(env, message = "", createdLink = "") {
       <h2>Accessi esistenti</h2>
       ${accesses.length ? `<div>${accesses.map(access => {
         const status = access.revoked ? "Revocato" : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? "Scaduto" : "Attivo");
-        return `<div style="padding:12px 0;border-top:1px solid #333"><strong>${escapeHtml(access.label)}</strong><br>Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Link: <span class="link">${escapeHtml(new URL(`/access/${access.token}`, "https://guitar-lab.wb-chomp479.workers.dev").toString())}</span><button type="button" data-access-link="https://guitar-lab.wb-chomp479.workers.dev/access/${access.token}" onclick="copyAccessLink(this)">Copia link</button><br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}${access.revoked ? `<form method="post" action="/admin/access/reactivate" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Riattiva accesso</button></form>` : `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Revoca accesso</button></form>`}</div>`;
+        return `<div style="padding:12px 0;border-top:1px solid #333"><strong>${escapeHtml(access.label)}</strong><br>Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Link: <span class="link">${escapeHtml(new URL(`/access/${access.token}`, "https://guitar-lab.wb-chomp479.workers.dev").toString())}</span><button type="button" data-access-link="https://guitar-lab.wb-chomp479.workers.dev/access/${access.token}" onclick="copyAccessLink(this)">Copia link</button><br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}${access.revoked ? `<form method="post" action="/admin/access/reactivate" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Riattiva accesso</button></form><form method="post" action="/admin/access/delete" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Elimina utente</button></form>` : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? `<form method="post" action="/admin/access/delete" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Elimina utente</button></form>` : `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button type="submit">Revoca accesso</button></form>`) }</div>`;
       }).join("")}</div>` : "<p>Nessun accesso creato.</p>"}
 
       <h2>Crea nuovo accesso</h2>
@@ -469,6 +469,26 @@ export default {
       access.revoked = false;
       await env.GuitarLabAccess.put(accessKey, JSON.stringify(access));
       return adminDashboard(env, "Accesso riattivato correttamente.");
+    }
+
+    if (url.pathname === "/admin/access/delete" && request.method === "POST") {
+      if (!(await isValidAdminSession(request, env.ADMIN_PASSWORD))) {
+        return adminLoginPage("Sessione amministrativa non valida o scaduta.");
+      }
+      const formData = await request.formData();
+      const token = formData.get("token");
+      if (typeof token !== "string" || !token || token.includes("/")) {
+        return adminDashboard(env, "Accesso da eliminare non valido.");
+      }
+      const accessKey = `access:${token}`;
+      const access = await env.GuitarLabAccess.get(accessKey, "json");
+      if (!access) return adminDashboard(env, "Accesso non trovato.");
+      const isExpired = access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now();
+      if (access.revoked !== true && !isExpired) {
+        return adminDashboard(env, "Puoi eliminare solo accessi revocati o scaduti.");
+      }
+      await env.GuitarLabAccess.delete(accessKey);
+      return adminDashboard(env, "Accesso eliminato correttamente.");
     }
 
     if (url.pathname === "/admin/access/revoke" && request.method === "POST") {
