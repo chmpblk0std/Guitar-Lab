@@ -1,13 +1,250 @@
+const ADMIN_SESSION_COOKIE = "GL_ADMIN_SESSION";
+const ADMIN_SESSION_MAX_AGE = 8 * 60 * 60;
+
+function base64UrlEncode(bytes) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
+function base64UrlDecode(value) {
+  const padded = value.replaceAll("-", "+").replaceAll("_", "/")
+    + "=".repeat((4 - (value.length % 4)) % 4);
+
+  const binary = atob(padded);
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+async function hmacSign(value, secret) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(value)
+  );
+
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+async function createAdminSession(secret) {
+  const payload = {
+    exp: Math.floor(Date.now() / 1000) + ADMIN_SESSION_MAX_AGE,
+    nonce: crypto.randomUUID()
+  };
+
+  const encodedPayload = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(payload))
+  );
+  const signature = await hmacSign(encodedPayload, secret);
+
+  return `${encodedPayload}.${signature}`;
+}
+
+async function isValidAdminSession(request, secret) {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const match = cookieHeader.match(
+    new RegExp(`(?:^|;\\s*)${ADMIN_SESSION_COOKIE}=([^;]+)`)
+  );
+
+  if (!match) {
+    return false;
+  }
+
+  const [encodedPayload, signature] = match[1].split(".");
+  if (!encodedPayload || !signature) {
+    return false;
+  }
+
+  try {
+    const expectedSignature = await hmacSign(encodedPayload, secret);
+
+    if (signature !== expectedSignature) {
+      return false;
+    }
+
+    const payload = JSON.parse(
+      new TextDecoder().decode(base64UrlDecode(encodedPayload))
+    );
+
+    return Number.isFinite(payload.exp) && payload.exp > Math.floor(Date.now() / 1000);
+  } catch {
+    return false;
+  }
+}
+
+function adminLoginPage(errorMessage = "") {
+  return new Response(`<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Guitar Lab — Admin</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #090c11;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      width: min(420px, calc(100% - 32px));
+      box-sizing: border-box;
+      padding: 28px;
+      border-radius: 16px;
+      background: #151a22;
+    }
+    h1 { margin-top: 0; }
+    label { display: block; margin-bottom: 8px; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      border: 1px solid #555;
+      background: #0d1117;
+      color: #fff;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .error { color: #ff8a8a; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Guitar Lab — Admin</h1>
+    ${errorMessage ? `<p class="error">${errorMessage}</p>` : ""}
+    <form method="post" action="/admin/login">
+      <label for="password">Password amministratore</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Accedi</button>
+    </form>
+  </main>
+</body>
+</html>`, {
+    status: errorMessage ? 401 : 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store"
+    }
+  });
+}
+
+function adminDashboard() {
+  return new Response(`<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Guitar Lab — Admin</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #090c11;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      width: min(900px, calc(100% - 32px));
+      margin: 48px auto;
+    }
+    section {
+      padding: 24px;
+      border-radius: 16px;
+      background: #151a22;
+    }
+    form { margin-top: 20px; }
+    button {
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>Guitar Lab — Admin</h1>
+      <p>Autenticazione amministratore riuscita.</p>
+      <p>Il pannello di gestione degli accessi verrà aggiunto nei prossimi passaggi.</p>
+      <form method="post" action="/admin/logout">
+        <button type="submit">Esci</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>`, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store"
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/__admin-secret-test") {
-      const configured = typeof env.ADMIN_PASSWORD === "string" && env.ADMIN_PASSWORD.length > 0;
+    if (url.pathname === "/admin" && request.method === "GET") {
+      if (await isValidAdminSession(request, env.ADMIN_PASSWORD)) {
+        return adminDashboard();
+      }
 
-      return new Response(configured ? "Admin secret OK" : "Admin secret missing", {
-        status: configured ? 200 : 500,
-        headers: { "Cache-Control": "no-store" }
+      return adminLoginPage();
+    }
+
+    if (url.pathname === "/admin/login" && request.method === "POST") {
+      const formData = await request.formData();
+      const password = formData.get("password");
+
+      if (typeof password !== "string" || password !== env.ADMIN_PASSWORD) {
+        return adminLoginPage("Password non corretta.");
+      }
+
+      const session = await createAdminSession(env.ADMIN_PASSWORD);
+
+      return new Response(null, {
+        status: 303,
+        headers: {
+          "Location": "/admin",
+          "Set-Cookie": `${ADMIN_SESSION_COOKIE}=${session}; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=${ADMIN_SESSION_MAX_AGE}`,
+          "Cache-Control": "no-store"
+        }
+      });
+    }
+
+    if (url.pathname === "/admin/logout" && request.method === "POST") {
+      return new Response(null, {
+        status: 303,
+        headers: {
+          "Location": "/admin",
+          "Set-Cookie": `${ADMIN_SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=0`,
+          "Cache-Control": "no-store"
+        }
       });
     }
 
