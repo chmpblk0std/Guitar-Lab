@@ -482,6 +482,6 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
-    return env.ASSETS.fetch(request);
+    return accessDeniedPage("Per utilizzare Guitar Lab è necessario un accesso valido.");
   }
 };
