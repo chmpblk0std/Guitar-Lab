@@ -85,6 +85,15 @@ async function isValidAdminSession(request, secret) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function adminLoginPage(errorMessage = "") {
   return new Response(`<!doctype html>
 <html lang="it">
@@ -134,7 +143,7 @@ function adminLoginPage(errorMessage = "") {
 <body>
   <main>
     <h1>Guitar Lab — Admin</h1>
-    ${errorMessage ? `<p class="error">${errorMessage}</p>` : ""}
+    ${errorMessage ? `<p class="error">${escapeHtml(errorMessage)}</p>` : ""}
     <form method="post" action="/admin/login">
       <label for="password">Password amministratore</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
@@ -151,7 +160,7 @@ function adminLoginPage(errorMessage = "") {
   });
 }
 
-function adminDashboard() {
+function adminDashboard(message = "", createdLink = "") {
   return new Response(`<!doctype html>
 <html lang="it">
 <head>
@@ -174,14 +183,42 @@ function adminDashboard() {
       padding: 24px;
       border-radius: 16px;
       background: #151a22;
+      margin-bottom: 20px;
     }
-    form { margin-top: 20px; }
+    label { display: block; margin-bottom: 8px; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      border: 1px solid #555;
+      background: #0d1117;
+      color: #fff;
+    }
     button {
       padding: 10px 16px;
       border: 0;
       border-radius: 8px;
       cursor: pointer;
     }
+    .message {
+      padding: 12px;
+      border-radius: 8px;
+      background: #0d3320;
+      margin-bottom: 20px;
+      overflow-wrap: anywhere;
+    }
+    .link {
+      display: block;
+      margin-top: 8px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #0d1117;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    form { margin-top: 20px; }
   </style>
 </head>
 <body>
@@ -189,7 +226,24 @@ function adminDashboard() {
     <section>
       <h1>Guitar Lab — Admin</h1>
       <p>Autenticazione amministratore riuscita.</p>
-      <p>Il pannello di gestione degli accessi verrà aggiunto nei prossimi passaggi.</p>
+
+      ${message ? `<div class="message">${escapeHtml(message)}</div>` : ""}
+      ${createdLink ? `<div class="message">
+        <strong>Link di accesso creato:</strong>
+        <span class="link">${escapeHtml(createdLink)}</span>
+      </div>` : ""}
+
+      <h2>Crea nuovo accesso</h2>
+      <form method="post" action="/admin/access/create">
+        <label for="label">Nome / etichetta utente</label>
+        <input id="label" name="label" type="text" maxlength="100" required>
+
+        <label for="expiresAt">Scadenza (facoltativa)</label>
+        <input id="expiresAt" name="expiresAt" type="datetime-local">
+
+        <button type="submit">Crea accesso</button>
+      </form>
+
       <form method="post" action="/admin/logout">
         <button type="submit">Esci</button>
       </form>
@@ -235,6 +289,53 @@ export default {
           "Cache-Control": "no-store"
         }
       });
+    }
+
+    if (url.pathname === "/admin/access/create" && request.method === "POST") {
+      if (!(await isValidAdminSession(request, env.ADMIN_PASSWORD))) {
+        return adminLoginPage("Sessione amministrativa non valida o scaduta.");
+      }
+
+      const formData = await request.formData();
+      const label = formData.get("label");
+      const expiresAtInput = formData.get("expiresAt");
+
+      if (typeof label !== "string" || !label.trim()) {
+        return adminDashboard("Inserisci un nome o un'etichetta.");
+      }
+
+      let expiresAt = null;
+
+      if (typeof expiresAtInput === "string" && expiresAtInput.trim()) {
+        const parsed = new Date(expiresAtInput);
+
+        if (Number.isNaN(parsed.getTime())) {
+          return adminDashboard("La data di scadenza non è valida.");
+        }
+
+        if (parsed.getTime() <= Date.now()) {
+          return adminDashboard("La scadenza deve essere nel futuro.");
+        }
+
+        expiresAt = parsed.toISOString();
+      }
+
+      const token = crypto.randomUUID().replaceAll("-", "");
+      const record = {
+        token,
+        label: label.trim(),
+        createdAt: new Date().toISOString(),
+        expiresAt,
+        revoked: false,
+        lastAccessAt: null,
+        accessCount: 0
+      };
+
+      await env.GuitarLabAccess.put(`access:${token}`, JSON.stringify(record));
+
+      const accessUrl = new URL(`/access/${token}`, url.origin).toString();
+
+      return adminDashboard("Accesso creato correttamente.", accessUrl);
     }
 
     if (url.pathname === "/admin/logout" && request.method === "POST") {
