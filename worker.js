@@ -1,5 +1,7 @@
 const ADMIN_SESSION_COOKIE = "GL_ADMIN_SESSION";
 const ADMIN_SESSION_MAX_AGE = 8 * 60 * 60;
+const USER_SESSION_COOKIE = "GL_USER_SESSION";
+const USER_SESSION_MAX_AGE = 24 * 60 * 60;
 
 function base64UrlEncode(bytes) {
   let binary = "";
@@ -83,6 +85,64 @@ async function isValidAdminSession(request, secret) {
   } catch {
     return false;
   }
+}
+
+function getCookie(request, name) {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const match = cookieHeader.match(
+    new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)
+  );
+
+  return match ? match[1] : null;
+}
+
+async function createUserSession(env, accessToken) {
+  const sessionId = crypto.randomUUID().replaceAll("-", "");
+  const sessionRecord = {
+    accessToken,
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + USER_SESSION_MAX_AGE * 1000).toISOString()
+  };
+
+  await env.GuitarLabAccess.put(
+    `session:${sessionId}`,
+    JSON.stringify(sessionRecord),
+    { expirationTtl: USER_SESSION_MAX_AGE }
+  );
+
+  return sessionId;
+}
+
+async function getValidUserSession(request, env) {
+  const sessionId = getCookie(request, USER_SESSION_COOKIE);
+
+  if (!sessionId) {
+    return null;
+  }
+
+  const session = await env.GuitarLabAccess.get(`session:${sessionId}`, "json");
+
+  if (!session || !session.accessToken) {
+    return null;
+  }
+
+  const access = await env.GuitarLabAccess.get(
+    `access:${session.accessToken}`,
+    "json"
+  );
+
+  if (!access || access.revoked === true) {
+    return null;
+  }
+
+  if (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now()) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    access
+  };
 }
 
 function escapeHtml(value) {
@@ -259,6 +319,48 @@ function adminDashboard(message = "", createdLink = "") {
   });
 }
 
+function accessDeniedPage(message) {
+  return new Response(`<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Guitar Lab — Accesso</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #090c11;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      width: min(520px, calc(100% - 32px));
+      box-sizing: border-box;
+      padding: 28px;
+      border-radius: 16px;
+      background: #151a22;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Accesso non disponibile</h1>
+    <p>${escapeHtml(message)}</p>
+  </main>
+</body>
+</html>`, {
+    status: 403,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store"
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -338,15 +440,46 @@ export default {
       return adminDashboard("Accesso creato correttamente.", accessUrl);
     }
 
-    if (url.pathname === "/admin/logout" && request.method === "POST") {
+    if (url.pathname === "/access" || url.pathname.startsWith("/access/")) {
+      const token = url.pathname.slice("/access/".length);
+
+      if (request.method !== "GET" || !token || token.includes("/")) {
+        return accessDeniedPage("Link di accesso non valido.");
+      }
+
+      const access = await env.GuitarLabAccess.get(`access:${token}`, "json");
+
+      if (!access || access.revoked === true) {
+        return accessDeniedPage("Questo accesso non è più disponibile.");
+      }
+
+      if (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now()) {
+        return accessDeniedPage("Questo accesso è scaduto.");
+      }
+
+      const sessionId = await createUserSession(env, token);
+
+      access.lastAccessAt = new Date().toISOString();
+      access.accessCount = Number.isFinite(access.accessCount)
+        ? access.accessCount + 1
+        : 1;
+
+      await env.GuitarLabAccess.put(`access:${token}`, JSON.stringify(access));
+
       return new Response(null, {
-        status: 303,
+        status: 302,
         headers: {
-          "Location": "/admin",
-          "Set-Cookie": `${ADMIN_SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/admin; Max-Age=0`,
+          "Location": "/",
+          "Set-Cookie": `${USER_SESSION_COOKIE}=${sessionId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${USER_SESSION_MAX_AGE}`,
           "Cache-Control": "no-store"
         }
       });
+    }
+
+    const userSession = await getValidUserSession(request, env);
+
+    if (userSession) {
+      return env.ASSETS.fetch(request);
     }
 
     return env.ASSETS.fetch(request);
