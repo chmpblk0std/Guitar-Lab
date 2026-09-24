@@ -661,16 +661,22 @@ export default {
 
       await env.GuitarLabAccess.put(`access:${token}`, JSON.stringify(access));
 
+      const responseHeaders = new Headers({
+        "Location": "/",
+        "Cache-Control": "no-store"
+      });
+      responseHeaders.append(
+        "Set-Cookie",
+        `${USER_SESSION_COOKIE}=${sessionId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${USER_SESSION_MAX_AGE}`
+      );
+      responseHeaders.append(
+        "Set-Cookie",
+        `${DEVICE_COOKIE}=${deviceId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${DEVICE_COOKIE_MAX_AGE}`
+      );
+
       return new Response(null, {
         status: 302,
-        headers: {
-          "Location": "/",
-          "Set-Cookie": [
-            `${USER_SESSION_COOKIE}=${sessionId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${USER_SESSION_MAX_AGE}`,
-            `${DEVICE_COOKIE}=${deviceId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${DEVICE_COOKIE_MAX_AGE}`
-          ],
-          "Cache-Control": "no-store"
-        }
+        headers: responseHeaders
       });
     }
 
