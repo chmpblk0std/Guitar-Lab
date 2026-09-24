@@ -2,6 +2,9 @@ const ADMIN_SESSION_COOKIE = "GL_ADMIN_SESSION";
 const ADMIN_SESSION_MAX_AGE = 8 * 60 * 60;
 const USER_SESSION_COOKIE = "GL_USER_SESSION";
 const USER_SESSION_MAX_AGE = 24 * 60 * 60;
+const DEVICE_COOKIE = "GL_DEVICE_ID";
+const DEVICE_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
+const DEFAULT_MAX_DEVICES = 1;
 
 function base64UrlEncode(bytes) {
   let binary = "";
@@ -96,10 +99,11 @@ function getCookie(request, name) {
   return match ? match[1] : null;
 }
 
-async function createUserSession(env, accessToken) {
+async function createUserSession(env, accessToken, deviceId) {
   const sessionId = crypto.randomUUID().replaceAll("-", "");
   const sessionRecord = {
     accessToken,
+    deviceId,
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + USER_SESSION_MAX_AGE * 1000).toISOString()
   };
@@ -113,16 +117,64 @@ async function createUserSession(env, accessToken) {
   return sessionId;
 }
 
+async function getRegisteredDevices(env, accessToken) {
+  const listed = await env.GuitarLabAccess.list({ prefix: `device:${accessToken}:` });
+  const devices = [];
+
+  for (const key of listed.keys) {
+    const device = await env.GuitarLabAccess.get(key.name, "json");
+    if (device) devices.push(device);
+  }
+
+  return devices;
+}
+
+async function registerDevice(env, accessToken, deviceId) {
+  const now = new Date().toISOString();
+  const device = {
+    id: deviceId,
+    createdAt: now,
+    lastAccessAt: now,
+    revoked: false
+  };
+
+  await env.GuitarLabAccess.put(
+    `device:${accessToken}:${deviceId}`,
+    JSON.stringify(device)
+  );
+
+  return device;
+}
+
+async function recordDeviceAttempt(env, accessToken, deviceId) {
+  const attemptId = crypto.randomUUID().replaceAll("-", "");
+  const record = {
+    deviceId,
+    createdAt: new Date().toISOString()
+  };
+
+  await env.GuitarLabAccess.put(
+    `device-attempt:${accessToken}:${attemptId}`,
+    JSON.stringify(record)
+  );
+}
+
+async function getDeviceAttemptCount(env, accessToken) {
+  const listed = await env.GuitarLabAccess.list({ prefix: `device-attempt:${accessToken}:` });
+  return listed.keys.length;
+}
+
 async function getValidUserSession(request, env) {
   const sessionId = getCookie(request, USER_SESSION_COOKIE);
+  const deviceId = getCookie(request, DEVICE_COOKIE);
 
-  if (!sessionId) {
+  if (!sessionId || !deviceId) {
     return null;
   }
 
   const session = await env.GuitarLabAccess.get(`session:${sessionId}`, "json");
 
-  if (!session || !session.accessToken) {
+  if (!session || !session.accessToken || session.deviceId !== deviceId) {
     return null;
   }
 
@@ -139,9 +191,19 @@ async function getValidUserSession(request, env) {
     return null;
   }
 
+  const device = await env.GuitarLabAccess.get(
+    `device:${session.accessToken}:${deviceId}`,
+    "json"
+  );
+
+  if (!device || device.revoked === true) {
+    return null;
+  }
+
   return {
     sessionId,
-    access
+    access,
+    device
   };
 }
 
@@ -225,7 +287,11 @@ async function adminDashboard(env, message = "", createdLink = "") {
   const accesses = [];
   for (const key of listed.keys) {
     const access = await env.GuitarLabAccess.get(key.name, "json");
-    if (access) accesses.push(access);
+    if (access) {
+      access.devices = await getRegisteredDevices(env, access.token);
+      access.deviceAttemptCount = await getDeviceAttemptCount(env, access.token);
+      accesses.push(access);
+    }
   }
   accesses.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   return new Response(`<!doctype html>
@@ -321,7 +387,7 @@ async function adminDashboard(env, message = "", createdLink = "") {
       <h2>Accessi esistenti</h2>
       ${accesses.length ? `<div>${accesses.map(access => {
         const status = access.revoked ? "Revocato" : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? "Scaduto" : "Attivo");
-        return `<div style="padding:12px 0;border-top:1px solid #333"><span class="access-label">${escapeHtml(access.label)}</span><br><div class="access-meta">Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Link: <span class="link">${escapeHtml(new URL(`/access/${access.token}`, "https://guitar-lab.wb-chomp479.workers.dev").toString())}</span><button type="button" data-access-link="https://guitar-lab.wb-chomp479.workers.dev/access/${access.token}" onclick="copyAccessLink(this)">Copia link</button><br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}</div>${access.revoked ? `<form method="post" action="/admin/access/reactivate" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-reactivate" type="submit">Riattiva accesso</button></form><form method="post" action="/admin/access/delete" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-revoke" type="submit">Elimina utente</button></form>` : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? `<form method="post" action="/admin/access/delete" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-revoke" type="submit">Elimina utente</button></form>` : `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-revoke" type="submit">Revoca accesso</button></form>`) }</div>`;
+        return `<div style="padding:12px 0;border-top:1px solid #333"><span class="access-label">${escapeHtml(access.label)}</span><br><div class="access-meta">Stato: ${status}<br>Creato: ${escapeHtml(access.createdAt)}<br>Scadenza: ${access.expiresAt ? escapeHtml(access.expiresAt) : "Nessuna"}<br>Link: <span class="link">${escapeHtml(new URL(`/access/${access.token}`, "https://guitar-lab.wb-chomp479.workers.dev").toString())}</span><button type="button" data-access-link="https://guitar-lab.wb-chomp479.workers.dev/access/${access.token}" onclick="copyAccessLink(this)">Copia link</button><br>Accessi: ${Number.isFinite(access.accessCount) ? access.accessCount : 0}<br>Dispositivi autorizzati: ${access.devices.length} / ${Number.isInteger(access.maxDevices) && access.maxDevices > 0 ? access.maxDevices : DEFAULT_MAX_DEVICES}<br>Tentativi non autorizzati: ${access.deviceAttemptCount}</div>${access.revoked ? `<form method="post" action="/admin/access/reactivate" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-reactivate" type="submit">Riattiva accesso</button></form><form method="post" action="/admin/access/delete" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-revoke" type="submit">Elimina utente</button></form>` : (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now() ? `<form method="post" action="/admin/access/delete" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-revoke" type="submit">Elimina utente</button></form>` : `<form method="post" action="/admin/access/revoke" style="margin-top:8px"><input type="hidden" name="token" value="${escapeHtml(access.token)}"><button class="action-revoke" type="submit">Revoca accesso</button></form>`) }</div>`;
       }).join("")}</div>` : "<p>Nessun accesso creato.</p>"}
 
       <h2>Crea nuovo accesso</h2>
@@ -461,7 +527,8 @@ export default {
         expiresAt,
         revoked: false,
         lastAccessAt: null,
-        accessCount: 0
+        accessCount: 0,
+        maxDevices: DEFAULT_MAX_DEVICES
       };
 
       await env.GuitarLabAccess.put(`access:${token}`, JSON.stringify(record));
@@ -505,6 +572,17 @@ export default {
         return adminDashboard(env, "Puoi eliminare solo accessi revocati o scaduti.");
       }
       await env.GuitarLabAccess.delete(accessKey);
+
+      const deviceKeys = await env.GuitarLabAccess.list({ prefix: `device:${token}:` });
+      for (const key of deviceKeys.keys) {
+        await env.GuitarLabAccess.delete(key.name);
+      }
+
+      const attemptKeys = await env.GuitarLabAccess.list({ prefix: `device-attempt:${token}:` });
+      for (const key of attemptKeys.keys) {
+        await env.GuitarLabAccess.delete(key.name);
+      }
+
       return adminDashboard(env, "Accesso eliminato correttamente.");
     }
 
@@ -540,7 +618,41 @@ export default {
         return accessDeniedPage("Questo accesso è scaduto.");
       }
 
-      const sessionId = await createUserSession(env, token);
+      const deviceId = getCookie(request, DEVICE_COOKIE) || crypto.randomUUID().replaceAll("-", "");
+      const deviceKey = `device:${token}:${deviceId}`;
+      const existingDevice = await env.GuitarLabAccess.get(deviceKey, "json");
+
+      if (existingDevice && existingDevice.revoked !== true) {
+        existingDevice.lastAccessAt = new Date().toISOString();
+        await env.GuitarLabAccess.put(deviceKey, JSON.stringify(existingDevice));
+      } else if (!existingDevice) {
+        const devices = await getRegisteredDevices(env, token);
+        const maxDevices = Number.isInteger(access.maxDevices) && access.maxDevices > 0
+          ? access.maxDevices
+          : DEFAULT_MAX_DEVICES;
+
+        if (devices.length === 0) {
+          await registerDevice(env, token, deviceId);
+        } else {
+          await recordDeviceAttempt(env, token, deviceId);
+          return new Response(
+            `<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Guitar Lab — Accesso</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090c11;color:#fff;font-family:system-ui,sans-serif}main{width:min(520px,calc(100% - 32px));box-sizing:border-box;padding:28px;border-radius:16px;background:#151a22;text-align:center}</style></head><body><main><h1>Accesso non disponibile</h1><p>Questo accesso è già associato a un altro dispositivo.</p></main></body></html>`,
+            {
+              status: 403,
+              headers: {
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": "no-store",
+                "Set-Cookie": `${DEVICE_COOKIE}=${deviceId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${DEVICE_COOKIE_MAX_AGE}`
+              }
+            }
+          );
+        }
+      } else {
+        await recordDeviceAttempt(env, token, deviceId);
+        return accessDeniedPage("Questo dispositivo non è autorizzato.");
+      }
+
+      const sessionId = await createUserSession(env, token, deviceId);
 
       access.lastAccessAt = new Date().toISOString();
       access.accessCount = Number.isFinite(access.accessCount)
@@ -553,7 +665,10 @@ export default {
         status: 302,
         headers: {
           "Location": "/",
-          "Set-Cookie": `${USER_SESSION_COOKIE}=${sessionId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${USER_SESSION_MAX_AGE}`,
+          "Set-Cookie": [
+            `${USER_SESSION_COOKIE}=${sessionId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${USER_SESSION_MAX_AGE}`,
+            `${DEVICE_COOKIE}=${deviceId}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${DEVICE_COOKIE_MAX_AGE}`
+          ],
           "Cache-Control": "no-store"
         }
       });
