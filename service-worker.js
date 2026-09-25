@@ -40,7 +40,7 @@ async function networkFirstNavigation(request) {
         // Navigation requests deliberately go to the network first.
         // This prevents a revoked/expired server-side authorization from
         // being hidden indefinitely by the cached app shell.
-        const response = await fetch(request, { cache: "no-store" });
+        const response = await fetch(request, { cache: "no-store", credentials: "include" });
 
         if (response.ok) {
             const copy = response.clone();
